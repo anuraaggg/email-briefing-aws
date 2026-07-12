@@ -8,8 +8,10 @@ using deterministic rule-based logic.
 
 ## 🧱 Architecture
 
-- **Amazon EventBridge Scheduler** – Triggers execution on a cron schedule
-- **AWS Lambda (Python)** – Fetches email metadata and generates summaries
+- **Amazon EventBridge Scheduler** – Triggers the fetch stage on a cron schedule
+- **AWS Lambda (Python) – Fetch stage** – Retrieves Gmail email metadata and enqueues it
+- **Amazon SQS** – Decouples fetching from classification/delivery and buffers bursts of emails
+- **AWS Lambda (Python) – Processing stage** – Triggered by SQS in batches; classifies emails and builds the summary
 - **Amazon SES** – Sends the email briefing
 - **Amazon S3** – Securely stores Gmail OAuth token
 - **Amazon CloudWatch** – Logs execution and delivery status
@@ -19,11 +21,23 @@ using deterministic rule-based logic.
 
 ## 🔄 Workflow
 
-1. EventBridge Scheduler triggers the Lambda function
-2. Lambda retrieves Gmail OAuth token from S3
-3. Recent email subjects are fetched
-4. Emails are classified into actionable vs informational
-5. A formatted summary is emailed via Amazon SES
+1. EventBridge Scheduler triggers the fetch Lambda (`fetch_handler.py`)
+2. Fetch Lambda retrieves the Gmail OAuth token from S3
+3. Recent email metadata (sender, subject) is fetched and pushed onto an SQS queue,
+   one message per email
+4. SQS triggers the processing Lambda (`lambda_handler.py`) in batches, decoupling
+   Gmail fetches from classification/delivery and buffering any burst of emails
+5. Emails in the batch are classified into actionable vs informational
+6. A formatted summary is emailed via Amazon SES
+
+### Fault tolerance
+
+Because the two stages are decoupled by SQS, a failure in the processing Lambda
+(e.g. a transient SES error) only affects the in-flight batch — SQS's visibility
+timeout redelivers those messages for retry without re-fetching from Gmail. An
+SQS redrive policy (dead-letter queue with `maxReceiveCount`) can be attached to
+the queue so messages that repeatedly fail processing are captured for inspection
+instead of being retried indefinitely.
 
 ---
 
@@ -39,11 +53,29 @@ This is expected behavior when SPF, DKIM, and DMARC are not configured.
 
 - AWS Lambda (Python)
 - Amazon EventBridge Scheduler
+- Amazon SQS
 - Amazon SES
 - Amazon S3
 - Amazon CloudWatch
 - AWS IAM
 - Gmail API
+
+---
+
+## ⚙️ Deployment Notes
+
+This repo ships the two Lambda functions and no IaC template, so the queue and
+triggers are wired up manually:
+
+1. Create a standard SQS queue (e.g. `email-briefing-queue`) and, optionally, a
+   dead-letter queue attached via a redrive policy.
+2. Deploy `fetch_handler.py` as a Lambda with an EventBridge Scheduler trigger
+   (cron) and an `SQS_QUEUE_URL` environment variable pointing at the queue.
+3. Deploy `lambda_handler.py` as a second Lambda with an SQS trigger (event
+   source mapping) on the same queue; set the batch size to the max number of
+   emails fetched per run (15) so one run produces one summary email.
+4. Grant the fetch Lambda `sqs:SendMessage` on the queue, and the processing
+   Lambda `sqs:ReceiveMessage` / `sqs:DeleteMessage` / `sqs:GetQueueAttributes`.
 
 ---
 
