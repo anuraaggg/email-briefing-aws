@@ -10,7 +10,7 @@ def handler(event, context):
 
     for record in event.get("Records", []):
         body = json.loads(record["body"])
-        emails.append((body["sender"], body["subject"]))
+        emails.extend((item["sender"], item["subject"]) for item in body)
 
     if not emails:
         return {

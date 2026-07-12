@@ -28,11 +28,12 @@ def handler(event, context):
 
     sqs = boto3.client("sqs")
 
-    for sender, subject in emails:
-        sqs.send_message(
-            QueueUrl=QUEUE_URL,
-            MessageBody=json.dumps({"sender": sender, "subject": subject}),
-        )
+    sqs.send_message(
+        QueueUrl=QUEUE_URL,
+        MessageBody=json.dumps(
+            [{"sender": sender, "subject": subject} for sender, subject in emails]
+        ),
+    )
 
     return {
         "statusCode": 200,

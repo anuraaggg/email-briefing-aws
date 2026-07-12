@@ -23,11 +23,13 @@ using deterministic rule-based logic.
 
 1. EventBridge Scheduler triggers the fetch Lambda (`fetch_handler.py`)
 2. Fetch Lambda retrieves the Gmail OAuth token from S3
-3. Recent email metadata (sender, subject) is fetched and pushed onto an SQS queue,
-   one message per email
-4. SQS triggers the processing Lambda (`lambda_handler.py`) in batches, decoupling
-   Gmail fetches from classification/delivery and buffering any burst of emails
-5. Emails in the batch are classified into actionable vs informational
+3. Recent email metadata (sender, subject) is fetched and pushed onto an SQS queue
+   as a single message containing the full list for that run — this keeps a run's
+   emails atomic so they're always classified and summarized together
+4. SQS triggers the processing Lambda (`lambda_handler.py`), decoupling Gmail
+   fetches from classification/delivery and buffering the queue if the processing
+   side is briefly unavailable
+5. Emails in the message are classified into actionable vs informational
 6. A formatted summary is emailed via Amazon SES
 
 ### Fault tolerance
@@ -72,8 +74,8 @@ triggers are wired up manually:
 2. Deploy `fetch_handler.py` as a Lambda with an EventBridge Scheduler trigger
    (cron) and an `SQS_QUEUE_URL` environment variable pointing at the queue.
 3. Deploy `lambda_handler.py` as a second Lambda with an SQS trigger (event
-   source mapping) on the same queue; set the batch size to the max number of
-   emails fetched per run (15) so one run produces one summary email.
+   source mapping) on the same queue; leave the batch size at 1 so each queued
+   message (one run's worth of emails) maps to exactly one summary email.
 4. Grant the fetch Lambda `sqs:SendMessage` on the queue, and the processing
    Lambda `sqs:ReceiveMessage` / `sqs:DeleteMessage` / `sqs:GetQueueAttributes`.
 
